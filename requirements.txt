@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pymupdf
+faiss-cpu
+scikit-learn
+numpy
+langgraph
+langchain-core
+openai
+streamlit
+requests
