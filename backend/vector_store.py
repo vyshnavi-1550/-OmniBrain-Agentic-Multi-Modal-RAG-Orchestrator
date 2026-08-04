@@ -63,6 +63,32 @@ class VectorStore:
     def search(self, query: str, top_k: int = 5, modality_filter: str = None) -> List[Dict[str, Any]]:
         if self.index.ntotal == 0:
             return []
+
+        if modality_filter:
+            # Filter to the matching subset BEFORE ranking -- filtering only
+            # the global top-k *after* ranking can silently return nothing
+            # if no matching-modality vector happens to land in that top-k.
+            matching_idx = [i for i, p in enumerate(self.payloads) if p.get("modality") == modality_filter]
+            if not matching_idx:
+                return []
+            sub_corpus = [self.corpus[i] for i in matching_idx]
+            sub_vecs = embed_texts(sub_corpus)
+            qvec = embed_query(query, reference_corpus=sub_corpus)
+            sub_index = faiss.IndexFlatL2(sub_vecs.shape[1])
+            sub_index.add(sub_vecs)
+            D, I = sub_index.search(np.array([qvec]), min(top_k, sub_index.ntotal))
+            results = []
+            for dist, sub_i in zip(D[0], I[0]):
+                if sub_i < 0:
+                    continue
+                orig_idx = matching_idx[sub_i]
+                results.append({
+                    "score": float(dist),
+                    "text": self.corpus[orig_idx],
+                    **self.payloads[orig_idx],
+                })
+            return results
+
         qvec = embed_query(query, reference_corpus=self.corpus)
         # rebuild a temporary index if using TF-IDF fallback so dims match
         # (embed_query returns a vector sized to current corpus+query fit)
@@ -81,8 +107,6 @@ class VectorStore:
             if idx < 0 or idx >= len(self.payloads):
                 continue
             payload = self.payloads[idx]
-            if modality_filter and payload.get("modality") != modality_filter:
-                continue
             results.append({
                 "score": float(dist),
                 "text": self.corpus[idx],
