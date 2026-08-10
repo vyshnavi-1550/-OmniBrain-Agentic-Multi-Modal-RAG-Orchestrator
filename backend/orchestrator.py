@@ -19,6 +19,7 @@ from langgraph.graph import StateGraph, END
 import search_agent
 import sql_agent
 import guardrails
+import nemo_integration
 from config import USE_OPENAI, OPENAI_API_KEY
 
 
@@ -124,8 +125,8 @@ def guardrail_node(state: GraphState) -> GraphState:
         r.get("modality") == "image" for r in state["retrieved"]
     )
     if state["route"] == "search" and not is_image_intent:
-        relevance = guardrails.query_relevance_check(state["query"], context_texts)
-        state["trace"].append(f"guardrail:query_relevance -> {relevance}")
+        relevance = nemo_integration.check_topic_relevance_nemo(state["query"], context_texts)
+        state["trace"].append(f"guardrail:nemo_topic_relevance -> {relevance}")
         if not relevance["relevant"]:
             state["answer"] = "I don't have enough grounded context to answer that question from the ingested documents."
             state["grounding"] = {"grounded": False, "reason": relevance["reason"], "query_overlap": relevance["overlap"]}

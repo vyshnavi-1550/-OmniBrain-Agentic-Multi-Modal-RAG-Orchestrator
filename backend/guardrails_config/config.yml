@@ -1,0 +1,20 @@
+# NeMo Guardrails configuration for OmniBrain.
+#
+# `models` must be declared for NeMo Guardrails to initialize, even though
+# our custom "check topic relevance" action below does NOT call this model --
+# it runs a free, local relevance check (see actions.py). This keeps the
+# guardrail fully functional offline/without an API key, while still using
+# the real NeMo Guardrails framework (Colang flows, rails engine, custom
+# actions) rather than a hand-rolled substitute.
+#
+# If OPENAI_API_KEY is set, this model becomes available for other rails
+# (e.g. a real LLM-based topical check) without any code changes.
+models:
+  - type: main
+    engine: openai
+    model: gpt-4o-mini
+
+rails:
+  input:
+    flows:
+      - check topic relevance

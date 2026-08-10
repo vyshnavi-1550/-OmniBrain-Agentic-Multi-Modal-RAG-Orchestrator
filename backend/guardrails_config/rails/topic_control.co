@@ -1,0 +1,13 @@
+# Colang flow: enforce that OmniBrain only answers questions grounded in the
+# ingested documents. Calls the custom `check_topic_relevance` action, which
+# runs a local (no-LLM-required) lexical relevance check by default, or a
+# real LLM-based check if OPENAI_API_KEY is configured.
+
+define flow check topic relevance
+  $relevance_result = execute check_topic_relevance
+  if not $relevance_result["relevant"]
+    bot refuse to answer off topic
+    stop
+
+define bot refuse to answer off topic
+  "I don't have enough grounded context to answer that question from the ingested documents."
