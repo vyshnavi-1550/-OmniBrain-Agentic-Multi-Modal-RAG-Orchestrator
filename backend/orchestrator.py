@@ -1,28 +1,33 @@
 """
 Week 2 deliverable: Agentic Orchestrator built with LangGraph.
-
+ 
 Graph shape:
-
+ 
     supervisor -> (search_agent | sql_agent) -> synthesize -> guardrail -> END
-
+ 
 The supervisor node decides whether the question needs semantic document
 search or a historical-data SQL lookup (Text-to-SQL agent). The Vision Agent
 is invoked directly by `answer_with_image()` when a result references a
 specific chart/image the user wants explained (used by the API layer for
 follow-up "explain that chart" queries).
-
+ 
 Self-RAG style self-correction (Week 3) lives in `search_with_self_correction`.
+ 
+Week 4: Langfuse tracing wraps the top-level `ask()` call via the @observe
+decorator, capturing latency, inputs/outputs, and route/grounding metadata
+for every query.
 """
 from typing import TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, END
-
+from langfuse import observe, get_client
+ 
 import search_agent
 import sql_agent
 import guardrails
 import nemo_integration
 from config import USE_OPENAI, OPENAI_API_KEY
-
-
+ 
+ 
 class GraphState(TypedDict):
     query: str
     route: Optional[str]
@@ -31,14 +36,14 @@ class GraphState(TypedDict):
     answer: Optional[str]
     grounding: Optional[Dict[str, Any]]
     trace: List[str]
-
-
+ 
+ 
 SQL_KEYWORDS = [
     "price", "stock", "close", "open", "volume", "high", "low",
     "average", "historical", "quarter", "revenue", "ticker",
 ]
-
-
+ 
+ 
 def supervisor_node(state: GraphState) -> GraphState:
     q = state["query"].lower()
     if USE_OPENAI:
@@ -48,8 +53,8 @@ def supervisor_node(state: GraphState) -> GraphState:
     state["route"] = route
     state["trace"].append(f"supervisor -> routed to '{route}'")
     return state
-
-
+ 
+ 
 def _llm_route(question: str) -> str:
     from openai import OpenAI
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -69,22 +74,22 @@ def _llm_route(question: str) -> str:
     )
     word = resp.choices[0].message.content.strip().lower()
     return "sql" if "sql" in word else "search"
-
-
+ 
+ 
 def search_node(state: GraphState) -> GraphState:
     result = search_with_self_correction(state["query"])
     state["retrieved"] = result["results"]
     state["trace"].extend(result["trace"])
     return state
-
-
+ 
+ 
 def sql_node(state: GraphState) -> GraphState:
     result = sql_agent.run(state["query"])
     state["sql_result"] = result
     state["trace"].append(f"sql_agent -> {result.get('sql', result.get('error'))}")
     return state
-
-
+ 
+ 
 def synthesize_node(state: GraphState) -> GraphState:
     if state["route"] == "sql":
         r = state["sql_result"]
@@ -104,8 +109,8 @@ def synthesize_node(state: GraphState) -> GraphState:
             state["answer"] = f"Based on retrieved context [{citations}]: {preview}"
     state["trace"].append("synthesize -> answer drafted")
     return state
-
-
+ 
+ 
 def guardrail_node(state: GraphState) -> GraphState:
     if state["route"] == "sql":
         sql_res = state.get("sql_result") or {}
@@ -114,13 +119,13 @@ def guardrail_node(state: GraphState) -> GraphState:
     else:
         has_context = guardrails.scope_check(state.get("retrieved", []))
         context_texts = [c["text"] for c in state.get("retrieved", [])]
-
+ 
     if not has_context:
         state["answer"] = "I don't have enough grounded context to answer that question from the ingested documents."
         state["grounding"] = {"grounded": False, "reason": "scope_check failed"}
         state["trace"].append(f"guardrail -> {state['grounding']}")
         return state
-
+ 
     is_image_intent = bool(state.get("retrieved")) and all(
         r.get("modality") == "image" for r in state["retrieved"]
     )
@@ -132,16 +137,16 @@ def guardrail_node(state: GraphState) -> GraphState:
             state["grounding"] = {"grounded": False, "reason": relevance["reason"], "query_overlap": relevance["overlap"]}
             state["trace"].append(f"guardrail -> {state['grounding']}")
             return state
-
+ 
     state["grounding"] = guardrails.grounding_check(state["answer"] or "", context_texts)
     state["trace"].append(f"guardrail -> {state['grounding']}")
     return state
-
-
+ 
+ 
 def route_decision(state: GraphState) -> str:
     return state["route"]
-
-
+ 
+ 
 def build_graph():
     graph = StateGraph(GraphState)
     graph.add_node("supervisor", supervisor_node)
@@ -149,7 +154,7 @@ def build_graph():
     graph.add_node("sql_agent", sql_node)
     graph.add_node("synthesize", synthesize_node)
     graph.add_node("guardrail", guardrail_node)
-
+ 
     graph.set_entry_point("supervisor")
     graph.add_conditional_edges("supervisor", route_decision, {
         "search": "search_agent",
@@ -160,11 +165,12 @@ def build_graph():
     graph.add_edge("synthesize", "guardrail")
     graph.add_edge("guardrail", END)
     return graph.compile()
-
-
+ 
+ 
 _compiled_graph = None
-
-
+ 
+ 
+@observe(name="omnibrain-query")
 def ask(query: str) -> Dict[str, Any]:
     global _compiled_graph
     if _compiled_graph is None:
@@ -174,9 +180,18 @@ def ask(query: str) -> Dict[str, Any]:
         "answer": None, "grounding": None, "trace": [],
     }
     final_state = _compiled_graph.invoke(initial)
+ 
+    langfuse = get_client()
+    langfuse.update_current_span(
+        metadata={
+            "route": final_state.get("route"),
+            "grounding": final_state.get("grounding"),
+        },
+    )
     return final_state
-
-
+    
+ 
+ 
 # ---------- Week 3: Self-RAG self-correction loop ----------
 def search_with_self_correction(query: str, max_retries: int = 2) -> Dict[str, Any]:
     trace = []
@@ -185,23 +200,23 @@ def search_with_self_correction(query: str, max_retries: int = 2) -> Dict[str, A
         result = search_agent.run(q)
         results = result["results"]
         trace.append(f"search_agent attempt {attempt+1} for '{q}' -> {len(results)} hits")
-
+ 
         if not results:
             trace.append("no results at all, stopping retries")
             break
-
+ 
         best_score = min(r["score"] for r in results)
         RELEVANCE_THRESHOLD = 1.5
         if best_score <= RELEVANCE_THRESHOLD or attempt == max_retries:
             trace.append(f"accepted results (best_score={best_score:.3f})")
             return {"results": results, "trace": trace}
-
+ 
         q = _rewrite_query(query, attempt)
         trace.append(f"low relevance (best_score={best_score:.3f}), rewriting query -> '{q}'")
-
+ 
     return {"results": [], "trace": trace}
-
-
+ 
+ 
 def _rewrite_query(original_query: str, attempt: int) -> str:
     if USE_OPENAI:
         from openai import OpenAI

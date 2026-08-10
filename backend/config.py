@@ -10,8 +10,13 @@ time -- the interfaces don't change.
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# Load variables from a .env file at the project root (if present)
+load_dotenv(ROOT_DIR / ".env")
+
 DATA_DIR = ROOT_DIR / "data"
 UPLOAD_DIR = DATA_DIR / "uploads"
 INDEX_DIR = DATA_DIR / "index"
@@ -29,3 +34,9 @@ CHUNK_OVERLAP = 150       # overlap between chunks
 
 # Retrieval
 TOP_K = 5
+
+# Langfuse (observability / tracing) — optional; tracing is skipped gracefully if unset
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+USE_LANGFUSE = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)
