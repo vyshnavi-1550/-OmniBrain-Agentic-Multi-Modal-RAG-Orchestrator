@@ -117,8 +117,22 @@ def guardrail_node(state: GraphState) -> GraphState:
     if not has_context:
         state["answer"] = "I don't have enough grounded context to answer that question from the ingested documents."
         state["grounding"] = {"grounded": False, "reason": "scope_check failed"}
-    else:
-        state["grounding"] = guardrails.grounding_check(state["answer"] or "", context_texts)
+        state["trace"].append(f"guardrail -> {state['grounding']}")
+        return state
+
+    is_image_intent = bool(state.get("retrieved")) and all(
+        r.get("modality") == "image" for r in state["retrieved"]
+    )
+    if state["route"] == "search" and not is_image_intent:
+        relevance = guardrails.query_relevance_check(state["query"], context_texts)
+        state["trace"].append(f"guardrail:query_relevance -> {relevance}")
+        if not relevance["relevant"]:
+            state["answer"] = "I don't have enough grounded context to answer that question from the ingested documents."
+            state["grounding"] = {"grounded": False, "reason": relevance["reason"], "query_overlap": relevance["overlap"]}
+            state["trace"].append(f"guardrail -> {state['grounding']}")
+            return state
+
+    state["grounding"] = guardrails.grounding_check(state["answer"] or "", context_texts)
     state["trace"].append(f"guardrail -> {state['grounding']}")
     return state
 
@@ -175,14 +189,12 @@ def search_with_self_correction(query: str, max_retries: int = 2) -> Dict[str, A
             trace.append("no results at all, stopping retries")
             break
 
-        # crude relevance signal: FAISS L2 distance, lower = better
         best_score = min(r["score"] for r in results)
-        RELEVANCE_THRESHOLD = 1.5  # tune per embedding space
+        RELEVANCE_THRESHOLD = 1.5
         if best_score <= RELEVANCE_THRESHOLD or attempt == max_retries:
             trace.append(f"accepted results (best_score={best_score:.3f})")
             return {"results": results, "trace": trace}
 
-        # Self-RAG: rewrite the query and retry
         q = _rewrite_query(query, attempt)
         trace.append(f"low relevance (best_score={best_score:.3f}), rewriting query -> '{q}'")
 
@@ -206,6 +218,5 @@ def _rewrite_query(original_query: str, attempt: int) -> str:
             max_tokens=50, temperature=0.5,
         )
         return resp.choices[0].message.content.strip()
-    # Fallback heuristic rewrite: broaden by dropping stop-ish qualifier words
     words = [w for w in original_query.split() if len(w) > 3]
     return " ".join(words[: max(2, len(words) - attempt)])
