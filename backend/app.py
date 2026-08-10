@@ -2,10 +2,10 @@
 FastAPI backend for OmniBrain.
 
 Endpoints:
-  POST /upload          - upload a PDF, kicks off ingestion as a background job
-  GET  /status/{job_id}  - poll ingestion progress/result for a job
-  POST /query            - ask a question, routed through the LangGraph orchestrator
-  GET  /health            - simple healthcheck
+  POST /upload            - upload a PDF, kicks off ingestion as a background job
+  GET  /status/{job_id}   - poll ingestion progress/result for a job
+  POST /query              - ask a question, routed through the LangGraph orchestrator
+  GET  /health              - simple healthcheck
 
 Run:
   uvicorn app:app --reload --port 8000
@@ -23,9 +23,6 @@ import orchestrator
 
 app = FastAPI(title="OmniBrain API")
 
-# In-memory job store: job_id -> {"status": "processing"|"done"|"error", ...}
-# For a production deployment, swap this for Redis/DB-backed job tracking so
-# state survives a server restart and works across multiple worker processes.
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
 
@@ -70,8 +67,6 @@ async def upload_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(
     with _jobs_lock:
         _jobs[job_id] = {"status": "processing"}
 
-    # Runs in a threadpool (Starlette handles sync background tasks this way),
-    # so this does NOT block the event loop -- /upload returns immediately.
     background_tasks.add_task(_run_ingestion_job, job_id, str(dest_path), doc_id)
 
     return {"job_id": job_id, "doc_id": doc_id, "status": "processing"}
@@ -88,9 +83,6 @@ async def job_status(job_id: str):
 
 @app.get("/images/{doc_id}")
 async def list_images(doc_id: str):
-    """List extracted images for a document directly from disk -- lets you
-    verify multi-modal extraction worked even without OPENAI_API_KEY, where
-    semantic image retrieval is limited by generic placeholder captions."""
     image_dir = UPLOAD_DIR / doc_id / "images"
     if not image_dir.exists():
         raise HTTPException(404, "No images found for this doc_id.")
@@ -101,13 +93,28 @@ async def list_images(doc_id: str):
 @app.post("/query")
 async def query(req: QueryRequest):
     result = orchestrator.ask(req.question)
+
+    grounding = result.get("grounding") or {}
+    is_refused = "reason" in grounding
+    is_grounded = grounding.get("grounded", False)
+    grounding_score = grounding.get("score", 0.0)
+
+    images = []
+    for item in result.get("retrieved", []):
+        if isinstance(item, dict) and item.get("modality") == "image":
+            path = item.get("image_path") or item.get("path") or item.get("file_path")
+            if path:
+                images.append(path)
+
     return {
         "question": req.question,
         "route": result["route"],
         "answer": result["answer"],
-        "grounding": result["grounding"],
+        "grounded": is_grounded,
+        "grounding_score": grounding_score,
+        "refused": is_refused,
+        "images": images,
         "retrieved": result.get("retrieved", []),
         "sql": result.get("sql_result"),
         "trace": result["trace"],
     }
-

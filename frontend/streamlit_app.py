@@ -75,7 +75,7 @@ for msg in st.session_state.messages:
             if g.get("grounded") is False:
                 st.warning(f"⚠️ Guardrail: {g.get('reason')}")
             else:
-                st.caption(f"✅ Grounded (overlap={g.get('overlap')})")
+                st.caption(f"✅ Grounded (overlap={g.get('query_overlap', g.get('score', 'N/A'))})")
         for img_ref in msg.get("images", []):
             p = Path(img_ref)
             if p.exists():
@@ -105,7 +105,7 @@ if question := st.chat_input("Ask OmniBrain about your document..."):
             if g.get("grounded") is False:
                 st.warning(f"⚠️ Guardrail: {g.get('reason')}")
             else:
-                st.caption(f"✅ Grounded (overlap={g.get('overlap')})")
+                st.caption(f"✅ Grounded (overlap={g.get('query_overlap', g.get('score', 'N/A'))})")
 
             st.session_state.messages.append({
                 "role": "assistant", "content": data["answer"],
