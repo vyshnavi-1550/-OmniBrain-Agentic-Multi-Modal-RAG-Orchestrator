@@ -40,3 +40,8 @@ LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
 LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
 USE_LANGFUSE = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)
+
+# Gemini (vision-language model) — optional; used for real chart/table
+# extraction on ingested images when OPENAI_API_KEY isn't set.
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+USE_GEMINI = bool(GOOGLE_API_KEY)
