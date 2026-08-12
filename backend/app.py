@@ -2,20 +2,24 @@
 FastAPI backend for OmniBrain.
 
 Endpoints:
-  POST /upload            - upload a PDF, kicks off ingestion as a background job
-  GET  /status/{job_id}   - poll ingestion progress/result for a job
-  POST /query              - ask a question, routed through the LangGraph orchestrator
-  GET  /health              - simple healthcheck
+  POST /upload                     - upload a PDF, kicks off ingestion as a background job
+  GET  /status/{job_id}            - poll ingestion progress/result for a job
+  POST /query                      - ask a question, routed through the LangGraph orchestrator
+  GET  /images/{doc_id}            - list extracted images for a document
+  GET  /page/{doc_id}/{page_number}- render a specific PDF page as a PNG (for citation links)
+  GET  /health                     - simple healthcheck
 
 Run:
   uvicorn app:app --reload --port 8000
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi.responses import Response
 from pydantic import BaseModel
 import shutil
 import uuid
 import threading
 import traceback
+import fitz  # PyMuPDF
 
 from config import UPLOAD_DIR
 import ingestion
@@ -88,6 +92,32 @@ async def list_images(doc_id: str):
         raise HTTPException(404, "No images found for this doc_id.")
     images = sorted(str(p) for p in image_dir.glob("*") if p.is_file())
     return {"doc_id": doc_id, "count": len(images), "image_paths": images}
+
+
+@app.get("/page/{doc_id}/{page_number}")
+async def get_page_image(doc_id: str, page_number: int):
+    """Render a specific PDF page as a PNG image on demand, so citations
+    like [p.18] can be clicked to view the exact source page."""
+    doc_dir = UPLOAD_DIR / doc_id
+    if not doc_dir.exists():
+        raise HTTPException(404, "Unknown doc_id.")
+
+    pdf_files = list(doc_dir.glob("*.pdf"))
+    if not pdf_files:
+        raise HTTPException(404, "No PDF found for this doc_id.")
+    pdf_path = pdf_files[0]
+
+    doc = fitz.open(pdf_path)
+    if page_number < 1 or page_number > len(doc):
+        doc.close()
+        raise HTTPException(404, f"Page {page_number} out of range (doc has {len(doc)} pages).")
+
+    page = doc[page_number - 1]
+    pix = page.get_pixmap(dpi=150)
+    png_bytes = pix.tobytes("png")
+    doc.close()
+
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.post("/query")
